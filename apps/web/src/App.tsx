@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { TRPCClientError } from "@trpc/client";
 import { api, logout } from "./trpc";
+import { Chat } from "./Chat";
 
 type Me = { email: string; role: string; workspace: string };
 
@@ -20,21 +22,21 @@ export function App() {
   if (!me) return <Shell><Login onLoggedIn={setMe} /></Shell>;
 
   return (
-    <Shell>
-      <p>
-        Logged in as <b>{me.email}</b> ({me.role})
-      </p>
-      <p>
-        Workspace: <b>{me.workspace}</b>
-      </p>
-      <button
-        onClick={async () => {
-          await logout();
-          setMe(null);
-        }}
-      >
-        Log out
-      </button>
+    <Shell wide>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <span>
+          <b>{me.workspace}</b> · {me.email}
+        </span>
+        <button
+          onClick={async () => {
+            await logout();
+            setMe(null);
+          }}
+        >
+          Log out
+        </button>
+      </div>
+      <Chat />
     </Shell>
   );
 }
@@ -52,8 +54,14 @@ function Login({ onLoggedIn }: { onLoggedIn: (me: Me) => void }) {
     try {
       await api.auth.login.mutate({ email, password });
       onLoggedIn(await api.auth.me.query());
-    } catch {
-      setError("Invalid email or password");
+    } catch (err) {
+      // Show the real reason. Only a 401 means wrong credentials; anything else is a server problem.
+      const status = err instanceof TRPCClientError ? (err.data as { httpStatus?: number } | undefined)?.httpStatus : undefined;
+      setError(
+        status === 401
+          ? "Invalid email or password"
+          : `Server error${status ? ` (${status})` : ""}: ${err instanceof Error ? err.message : String(err)}. Check the API terminal.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -80,9 +88,9 @@ function Login({ onLoggedIn }: { onLoggedIn: (me: Me) => void }) {
 
 const input = { display: "block", width: "100%", padding: 8, marginTop: 4 } as const;
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 560, margin: "64px auto", lineHeight: 1.6 }}>
+    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: wide ? 960 : 560, margin: "40px auto", padding: "0 16px", lineHeight: 1.6 }}>
       <h1>Nordwind</h1>
       {children}
     </main>

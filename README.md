@@ -7,6 +7,8 @@ A working version of the Nordwind case study, built the right way, step by step.
 2. API skeleton (Express + tRPC) and React frontend (Vite), with liveness/readiness checks
 3. Login: workspaces, users, sessions. 15-minute access token + revocable 7-day refresh token, both in httpOnly cookies.
    The workspace always comes from the signed token, never from the browser.
+4. Chats: conversations and messages, ownership check on every request, paginated sidebar, real deletes,
+   and automated tests proving one company can never read another company's chats.
 
 ## Run it (Windows PowerShell, from E:\Nordwind)
 
@@ -14,6 +16,7 @@ A working version of the Nordwind case study, built the right way, step by step.
 npm install          # after pulling new code
 npm run migrate      # applies new database migrations (run once per change, not on app start)
 npm run seed         # creates demo users (once)
+npm test             # tenant-isolation tests (runs against the database in .env)
 npm run dev:api      # terminal 1 -> http://localhost:3000
 npm run dev:web      # terminal 2 -> http://localhost:5173
 ```
@@ -34,4 +37,9 @@ Demo users (password `nordwind-demo-123`): `max@bauer.test` (Bauer Logistik), `a
 | Refresh tokens stored only as SHA-256 hashes; each one works once (rotation) | S6 |
 | Same error and timing for wrong email and wrong password | - |
 | Migrations run as a separate command | R7 |
+| Every chat call checks: this conversation belongs to this user AND this workspace (404 otherwise) | S3 |
+| Sidebar loads titles only, 30 at a time (keyset pagination); messages load when a chat opens | D3 |
+| Indexes match the queries: `(user_id, updated_at DESC, id DESC)`, `(conversation_id, id)` | D4 |
+| Deleting a chat deletes its messages (`ON DELETE CASCADE`) | S13 |
+| Tests fail if the ownership check is removed (verified) | - |
 | No stack traces in production error responses | - |

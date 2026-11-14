@@ -1,9 +1,11 @@
 import { router, publicProcedure } from "./trpc.js";
 import { db } from "./db.js";
 import { authRouter } from "./routers/auth.js";
+import { chatRouter } from "./routers/chat.js";
 
 export const appRouter = router({
   auth: authRouter,
+  chat: chatRouter,
 
   // Proves API -> Postgres works and that the pgvector extension is installed.
   dbStatus: publicProcedure.query(async () => {
