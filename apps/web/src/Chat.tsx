@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { TRPCClientError } from "@trpc/client";
 import { api } from "./trpc";
+import { streamChat } from "./stream";
 
 type Conversation = { id: string; title: string; updatedAt: string };
-type Message = { id: string; role: "user" | "assistant"; content: string; createdAt: string };
+type Message = { id: string; role: "user" | "assistant"; content: string; model?: string | null; createdAt: string };
+type Model = { id: string; label: string };
 type Cursor = { updatedAt: string; id: string } | null;
 
 const errorText = (err: unknown) => (err instanceof TRPCClientError || err instanceof Error ? err.message : String(err));
@@ -17,7 +19,23 @@ export function Chat() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [models, setModels] = useState<Model[]>([]);
+  const [model, setModel] = useState("");
+  const [streaming, setStreaming] = useState<string | null>(null); // the answer while it is being written
+  const stopper = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
+
+  // Only the models this workspace can actually use (case study U4).
+  useEffect(() => {
+    api.chat.models
+      .query()
+      .then((list) => {
+        setModels(list);
+        setModel((current) => current || list[0]?.id || "");
+      })
+      .catch((e) => setError(errorText(e)));
+  }, []);
 
   // Sidebar: first page of chats (titles only).
   const loadFirstPage = useCallback(async () => {
@@ -59,7 +77,7 @@ export function Chat() {
   // Without them, the arrow function would return scrollIntoView's result and React would crash.
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
-  }, [messages.length]);
+  }, [messages.length, streaming]);
 
   async function loadOlder() {
     if (!activeId || !olderCursor) return;
@@ -91,11 +109,14 @@ export function Chat() {
   async function send(e: FormEvent) {
     e.preventDefault();
     const content = draft.trim();
-    if (!content || sending) return;
+    if (!content || sending || !model) return;
 
     let conversationId = activeId;
     setSending(true);
     setError(null);
+    setNotice(null);
+    const stop = new AbortController();
+    stopper.current = stop;
     try {
       if (!conversationId) {
         const chat = await api.chat.create.mutate();
@@ -103,16 +124,28 @@ export function Chat() {
         setActiveId(chat.id);
       }
       setDraft("");
-      await api.chat.send.mutate({ conversationId, content });
-      const page = await api.chat.messages.query({ conversationId });
-      setMessages(page.items);
-      setOlderCursor(page.olderCursor);
-      await loadFirstPage(); // new title + moves to the top
+      // Show the question at once, then the answer word by word as it arrives (case study D8/U5).
+      setMessages((prev) => [...prev, { id: `local-${Date.now()}`, role: "user", content, createdAt: new Date().toISOString() }]);
+      setStreaming("");
+      await streamChat({ conversationId, content, model }, {
+        onToken: (t) => setStreaming((prev) => (prev ?? "") + t),
+        onNotice: setNotice,
+      }, stop.signal);
     } catch (err) {
-      setError(errorText(err));
-      setDraft(content); // don't lose what the user typed
+      if (!stop.signal.aborted) setError(errorText(err));
     } finally {
+      // Reload from the server: that's the saved truth (includes "[stopped]" answers and real ids).
+      if (conversationId) {
+        const page = await api.chat.messages.query({ conversationId }).catch(() => null);
+        if (page) {
+          setMessages(page.items);
+          setOlderCursor(page.olderCursor);
+        }
+        await loadFirstPage().catch(() => undefined); // new title + moves to the top
+      }
+      setStreaming(null);
       setSending(false);
+      stopper.current = null;
     }
   }
 
@@ -150,13 +183,23 @@ export function Chat() {
           {messages.map((m) => (
             <div key={m.id} style={m.role === "user" ? userBubble : botBubble}>
               {m.content}
+              {m.role === "assistant" && m.model && <div style={modelTag}>{models.find((x) => x.id === m.model)?.label ?? m.model}</div>}
             </div>
           ))}
+          {streaming !== null && <div style={botBubble}>{streaming || "…"}</div>}
           {!activeId && <p style={{ color: "#6b7280" }}>Start typing to begin a new chat.</p>}
           <div ref={bottom} />
         </div>
+        {notice && <p style={{ color: "#92400e", margin: "4px 0" }}>{notice}</p>}
         {error && <p style={{ color: "crimson", margin: "4px 0" }}>{error}</p>}
         <form onSubmit={send} style={{ display: "flex", gap: 8 }}>
+          <select value={model} onChange={(e) => setModel(e.target.value)} disabled={sending} style={{ padding: 8 }}>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -164,9 +207,15 @@ export function Chat() {
             maxLength={20000}
             style={{ flex: 1, padding: 10 }}
           />
-          <button type="submit" disabled={sending || !draft.trim()}>
-            {sending ? "Sending…" : "Send"}
-          </button>
+          {sending ? (
+            <button type="button" onClick={() => stopper.current?.abort()}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" disabled={!draft.trim() || !model}>
+              Send
+            </button>
+          )}
         </form>
       </section>
     </div>
@@ -182,3 +231,4 @@ const messageList = { flex: 1, overflowY: "auto", display: "flex", flexDirection
 const bubble = { padding: "8px 12px", borderRadius: 10, maxWidth: "80%", whiteSpace: "pre-wrap" } as const;
 const userBubble = { ...bubble, alignSelf: "flex-end", background: "#111827", color: "#fff" } as const;
 const botBubble = { ...bubble, alignSelf: "flex-start", background: "#f3f4f6" } as const;
+const modelTag = { fontSize: 11, color: "#6b7280", marginTop: 4 } as const;

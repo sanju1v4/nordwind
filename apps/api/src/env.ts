@@ -8,6 +8,14 @@ const schema = z.object({
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 random characters (see .env.example)"),
   API_PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+
+  // AI providers. Each one is optional: a model only appears in the app if its provider key is set.
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default("claude-haiku-4-5"),
+  MISTRAL_API_KEY: z.string().optional(),
+  MISTRAL_MODEL: z.string().default("mistral-small-latest"),
 });
 
 const parsed = schema.safeParse(process.env);

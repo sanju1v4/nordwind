@@ -17,7 +17,7 @@ export function refreshSession(): Promise<boolean> {
 
 // Every API call goes through this. If the access token expired (401), refresh once and retry.
 // The user never sees this happen; they stay logged in for up to 7 days.
-async function fetchWithRefresh(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function fetchWithRefresh(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const res = await fetch(input, init);
   const url = String(input);
   if (res.status !== 401 || url.includes("auth.login")) return res;

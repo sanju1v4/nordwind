@@ -9,6 +9,8 @@ A working version of the Nordwind case study, built the right way, step by step.
    The workspace always comes from the signed token, never from the browser.
 4. Chats: conversations and messages, ownership check on every request, paginated sidebar, real deletes,
    and automated tests proving one company can never read another company's chats.
+5. Real AI models with streaming: OpenAI / Anthropic / Mistral (+ an offline demo model), a server-side model
+   allow-list, timeouts, retries with backoff, circuit breaker, fallback model, Stop button, exact usage per request.
 
 ## Run it (Windows PowerShell, from E:\Nordwind)
 
@@ -42,4 +44,17 @@ Demo users (password `nordwind-demo-123`): `max@bauer.test` (Bauer Logistik), `a
 | Indexes match the queries: `(user_id, updated_at DESC, id DESC)`, `(conversation_id, id)` | D4 |
 | Deleting a chat deletes its messages (`ON DELETE CASCADE`) | S13 |
 | Tests fail if the ownership check is removed (verified) | - |
+| Server-side model list + per-workspace allow-list; dropdown built from it; unknown model = 400, not a crash | S10, U4 |
+| Timeout for the first token and for the whole answer | R3 |
+| Retry only 429 / 5xx / network / timeout, before the first token, with backoff + jitter + Retry-After | R4 |
+| Circuit breaker per provider + fallback model (only if the workspace allows it) | R5 |
+| Only the last 20 messages (max ~24k characters) go to the model | D7 |
+| Streaming answers, Stop button; closing the tab cancels the provider call | D8, U5 |
+| One `usage_events` row per request, in the same transaction as the answer | C1 |
+| Logs: one JSON line per request with ids, model, tokens, latency, status. Never message text | S8 |
+| Errors shown to users are specific and actionable; technical details only in logs | U2 |
+
+## Try the reliability features with the Demo model
+Put one of these words in a message: `[fail]` (provider down: watch retries and the error), `[429]` (rate limited),
+`[slow]` (first token never arrives in time: watch the timeout).
 | No stack traces in production error responses | - |

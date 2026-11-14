@@ -27,6 +27,11 @@ async function makeUser(workspaceId: string, label: string): Promise<AuthUser> {
   return { userId: rows[0].id, workspaceId, role: "member" };
 }
 
+// Sending goes through the streaming HTTP route (tested in chat-stream.test.ts); here we insert directly.
+async function addMessage(conversationId: string, content: string) {
+  await db.query("INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)", [conversationId, content]);
+}
+
 async function makeWorkspace(name: string): Promise<string> {
   const { rows } = await db.query<{ id: string }>("INSERT INTO workspaces (name) VALUES ($1) RETURNING id", [
     `${name} (test ${run})`,
@@ -49,7 +54,7 @@ beforeAll(async () => {
 
   const chat = await max.chat.create();
   maxChatId = chat.id;
-  await max.chat.send({ conversationId: maxChatId, content: "Our secret price list for 2027" });
+  await addMessage(maxChatId, "Our secret price list for 2027");
 });
 
 afterAll(async () => {
@@ -71,14 +76,6 @@ describe("tenant isolation", () => {
 
   it("another company cannot read the chat, even with the exact id", async () => {
     await expect(anna.chat.messages({ conversationId: maxChatId })).rejects.toMatchObject({ code: "NOT_FOUND" });
-  });
-
-  it("another company cannot write into the chat", async () => {
-    await expect(anna.chat.send({ conversationId: maxChatId, content: "injected" })).rejects.toMatchObject({
-      code: "NOT_FOUND",
-    });
-    const { items } = await max.chat.messages({ conversationId: maxChatId });
-    expect(items.map((m) => m.content)).not.toContain("injected");
   });
 
   it("another company cannot delete the chat", async () => {
@@ -105,7 +102,7 @@ describe("tenant isolation", () => {
 describe("chat behaviour", () => {
   it("deleting a chat also deletes its messages", async () => {
     const chat = await max.chat.create();
-    await max.chat.send({ conversationId: chat.id, content: "to be deleted" });
+    await addMessage(chat.id, "to be deleted");
     await max.chat.delete({ conversationId: chat.id });
     const { rowCount } = await db.query("SELECT 1 FROM messages WHERE conversation_id = $1", [chat.id]);
     expect(rowCount).toBe(0);
