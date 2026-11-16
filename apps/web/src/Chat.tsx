@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { TRPCClientError } from "@trpc/client";
 import { api } from "./trpc";
 import { streamChat } from "./stream";
+import { Documents } from "./Documents";
 
 type Conversation = { id: string; title: string; updatedAt: string };
-type Message = { id: string; role: "user" | "assistant"; content: string; model?: string | null; createdAt: string };
+type Source = { documentId: string; title: string };
+type Message = { id: string; role: "user" | "assistant"; content: string; model?: string | null; sources?: Source[]; createdAt: string };
 type Model = { id: string; label: string };
 type Cursor = { updatedAt: string; id: string } | null;
 
@@ -23,6 +25,8 @@ export function Chat() {
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [streaming, setStreaming] = useState<string | null>(null); // the answer while it is being written
+  const [useDocuments, setUseDocuments] = useState(true);
+  const [liveSources, setLiveSources] = useState<Source[]>([]);
   const stopper = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -127,9 +131,11 @@ export function Chat() {
       // Show the question at once, then the answer word by word as it arrives (case study D8/U5).
       setMessages((prev) => [...prev, { id: `local-${Date.now()}`, role: "user", content, createdAt: new Date().toISOString() }]);
       setStreaming("");
-      await streamChat({ conversationId, content, model }, {
+      setLiveSources([]);
+      await streamChat({ conversationId, content, model, useDocuments }, {
         onToken: (t) => setStreaming((prev) => (prev ?? "") + t),
         onNotice: setNotice,
+        onSources: setLiveSources,
       }, stop.signal);
     } catch (err) {
       if (!stop.signal.aborted) setError(errorText(err));
@@ -183,10 +189,16 @@ export function Chat() {
           {messages.map((m) => (
             <div key={m.id} style={m.role === "user" ? userBubble : botBubble}>
               {m.content}
+              {m.role === "assistant" && m.sources && m.sources.length > 0 && <SourceList sources={m.sources} />}
               {m.role === "assistant" && m.model && <div style={modelTag}>{models.find((x) => x.id === m.model)?.label ?? m.model}</div>}
             </div>
           ))}
-          {streaming !== null && <div style={botBubble}>{streaming || "…"}</div>}
+          {streaming !== null && (
+            <div style={botBubble}>
+              {streaming || "…"}
+              {liveSources.length > 0 && <SourceList sources={liveSources} />}
+            </div>
+          )}
           {!activeId && <p style={{ color: "#6b7280" }}>Start typing to begin a new chat.</p>}
           <div ref={bottom} />
         </div>
@@ -200,6 +212,10 @@ export function Chat() {
               </option>
             ))}
           </select>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, whiteSpace: "nowrap" }} title="Answer using your workspace's documents">
+            <input type="checkbox" checked={useDocuments} onChange={(e) => setUseDocuments(e.target.checked)} />
+            Documents
+          </label>
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -218,11 +234,18 @@ export function Chat() {
           )}
         </form>
       </section>
+
+      <Documents />
     </div>
   );
 }
 
-const layout = { display: "grid", gridTemplateColumns: "240px 1fr", gap: 16, height: "70vh" } as const;
+/** Which documents an answer was based on (case study U1: users can check the answer, and leaks would be visible). */
+function SourceList({ sources }: { sources: Source[] }) {
+  return <div style={sourceStyle}>Sources: {sources.map((s) => s.title).join(", ")}</div>;
+}
+
+const layout = { display: "grid", gridTemplateColumns: "220px 1fr 240px", gap: 16, height: "72vh" } as const;
 const sidebar = { borderRight: "1px solid #e5e7eb", paddingRight: 12, overflowY: "auto" } as const;
 const item = { display: "flex", alignItems: "center", borderRadius: 6, padding: "4px 6px" } as const;
 const itemTitle = { flex: 1, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as const;
@@ -232,3 +255,4 @@ const bubble = { padding: "8px 12px", borderRadius: 10, maxWidth: "80%", whiteSp
 const userBubble = { ...bubble, alignSelf: "flex-end", background: "#111827", color: "#fff" } as const;
 const botBubble = { ...bubble, alignSelf: "flex-start", background: "#f3f4f6" } as const;
 const modelTag = { fontSize: 11, color: "#6b7280", marginTop: 4 } as const;
+const sourceStyle = { fontSize: 12, color: "#374151", marginTop: 6, borderTop: "1px solid #e5e7eb", paddingTop: 4 } as const;

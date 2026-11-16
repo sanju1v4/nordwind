@@ -27,9 +27,12 @@ export function mock(opts: { tokenDelayMs?: number } = {}): Provider {
       if (last.includes("[slow]")) await sleep(20_000, req.signal);
 
       const history = req.messages.filter((m) => m.role !== "system").length;
+      const system = req.messages.find((m) => m.role === "system")?.content ?? "";
+      const docs = [...system.matchAll(/<document index="\d+" title="([^"]*)">/g)].map((m) => m[1]);
       const reply =
         `This is the offline demo model. You wrote ${last.length} characters, ` +
         `and I received ${history} message(s) of history. ` +
+        (docs.length ? `I was given ${docs.length} excerpt(s) from: ${[...new Set(docs)].join(", ")}. ` : "") +
         `Add an API key in .env to talk to a real model.`;
       const words = reply.split(/(?<= )/);
       for (const word of words) {

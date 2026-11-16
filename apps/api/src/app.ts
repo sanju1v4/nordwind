@@ -2,7 +2,7 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./router.js";
-import { createContext } from "./trpc.js";
+import { contextFactory, type Services } from "./trpc.js";
 import { db } from "./db.js";
 import { chatStreamRouter } from "./routes/chatStream.js";
 import type { ModelConfig } from "./llm/models.js";
@@ -17,8 +17,8 @@ import {
   signAccessToken,
 } from "./auth.js";
 
-/** Builds the whole HTTP app. Tests call this with fake AI providers; index.ts calls it with the real ones. */
-export function createApp(providers: Record<string, Provider>, models?: ModelConfig[]) {
+/** Builds the whole HTTP app. Tests call this with fakes; index.ts calls it with the real providers and S3. */
+export function createApp(providers: Record<string, Provider>, services: Services, models?: ModelConfig[]) {
   const app = express();
   app.disable("x-powered-by");
   app.use(cookieParser());
@@ -69,12 +69,12 @@ export function createApp(providers: Record<string, Provider>, models?: ModelCon
   });
 
   // Chat answers, streamed token by token.
-  app.use(chatStreamRouter(providers, models));
+  app.use(chatStreamRouter(providers, services, models));
 
   app.use(
     "/trpc",
     express.json({ limit: "1mb" }), // small on purpose: files will go straight to S3 later (case study S9)
-    createExpressMiddleware({ router: appRouter, createContext }),
+    createExpressMiddleware({ router: appRouter, createContext: contextFactory(services) }),
   );
 
   return app;

@@ -90,7 +90,7 @@ const input = { display: "block", width: "100%", padding: 8, marginTop: 4 } as c
 
 function Shell({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: wide ? 960 : 560, margin: "40px auto", padding: "0 16px", lineHeight: 1.6 }}>
+    <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: wide ? 1200 : 560, margin: "40px auto", padding: "0 16px", lineHeight: 1.6 }}>
       <h1>Nordwind</h1>
       {children}
     </main>

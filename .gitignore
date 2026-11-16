@@ -1,3 +1,8 @@
 node_modules/
 dist/
 .env
+# Terraform: state files contain secrets (the access key) and must never be committed
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan

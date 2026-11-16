@@ -58,8 +58,11 @@ export const chatRouter = router({
     .input(z.object({ conversationId, beforeId: z.string().regex(/^\d+$/).optional() }))
     .query(async ({ ctx, input }) => {
       await assertOwnsConversation(db, ctx.user, input.conversationId);
-      const { rows } = await db.query<{ id: string; role: "user" | "assistant"; content: string; model: string | null; created_at: Date }>(
-        `SELECT id, role, content, model, created_at
+      const { rows } = await db.query<{
+        id: string; role: "user" | "assistant"; content: string; model: string | null;
+        sources: { documentId: string; title: string }[] | null; created_at: Date;
+      }>(
+        `SELECT id, role, content, model, sources, created_at
            FROM messages
           WHERE conversation_id = $1 AND ($2::bigint IS NULL OR id < $2::bigint)
           ORDER BY id DESC
@@ -69,7 +72,9 @@ export const chatRouter = router({
       const hasMore = rows.length > MESSAGES_PAGE_SIZE;
       const page = rows.slice(0, MESSAGES_PAGE_SIZE).reverse(); // oldest first for display
       return {
-        items: page.map((m) => ({ id: m.id, role: m.role, content: m.content, model: m.model, createdAt: m.created_at.toISOString() })),
+        items: page.map((m) => ({
+          id: m.id, role: m.role, content: m.content, model: m.model, sources: m.sources ?? [], createdAt: m.created_at.toISOString(),
+        })),
         olderCursor: hasMore ? page[0]?.id ?? null : null,
       };
     }),

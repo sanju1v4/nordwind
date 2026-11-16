@@ -9,12 +9,13 @@ import type { Request, Response } from "express";
 import { appRouter } from "../src/router.js";
 import { db } from "../src/db.js";
 import type { AuthUser } from "../src/auth.js";
+import { demoEmbedder } from "../src/documents/embeddings.js";
 
 type Caller = ReturnType<typeof appRouter.createCaller>;
 
 // A caller acts exactly like a logged-in user's requests, without HTTP.
 const callerFor = (user: AuthUser | null): Caller =>
-  appRouter.createCaller({ req: {} as Request, res: {} as Response, user });
+  appRouter.createCaller({ req: {} as Request, res: {} as Response, user, services: { storage: null, embedder: demoEmbedder() } });
 
 const run = randomUUID().slice(0, 8);
 const createdWorkspaces: string[] = [];

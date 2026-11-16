@@ -9,6 +9,9 @@ import { db } from "../src/db.js";
 import { signAccessToken, type AuthUser } from "../src/auth.js";
 import { mock } from "../src/llm/providers/mock.js";
 import type { ModelConfig } from "../src/llm/models.js";
+import { demoEmbedder } from "../src/documents/embeddings.js";
+
+const services = { storage: null, embedder: demoEmbedder() };
 
 const run = randomUUID().slice(0, 8);
 const workspaces: string[] = [];
@@ -65,7 +68,7 @@ async function events(res: Response) {
 }
 
 beforeAll(async () => {
-  const app = createApp({ mock: mock({ tokenDelayMs: 1 }) }, MODELS);
+  const app = createApp({ mock: mock({ tokenDelayMs: 1 }) }, services, MODELS);
   server = app.listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -143,7 +146,7 @@ describe("POST /api/chat/stream", () => {
   });
 
   it("stops the model when the user presses Stop (closes the connection)", async () => {
-    const app = createApp({ mock: mock({ tokenDelayMs: 200 }) }, MODELS); // slow tokens
+    const app = createApp({ mock: mock({ tokenDelayMs: 200 }) }, services, MODELS); // slow tokens
     const slowServer = app.listen(0);
     const slowBase = `http://127.0.0.1:${(slowServer.address() as AddressInfo).port}`;
     try {

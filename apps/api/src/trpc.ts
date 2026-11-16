@@ -2,15 +2,21 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import { ACCESS_COOKIE, readCookie, verifyAccessToken, type AuthUser } from "./auth.js";
 import { isProduction } from "./env.js";
+import type { FileStorage } from "./documents/storage.js";
+import type { Embedder } from "./documents/embeddings.js";
+
+/** Outside services the API uses. Real ones in index.ts, fakes in tests. storage = null: knowledge base off. */
+export type Services = { storage: FileStorage | null; embedder: Embedder };
 
 // The context is what every procedure receives.
 // `user` comes ONLY from the signed access-token cookie, never from the request body (case study S2).
-export async function createContext({ req, res }: CreateExpressContextOptions) {
-  const token = readCookie(req, ACCESS_COOKIE);
-  const user: AuthUser | null = token ? await verifyAccessToken(token) : null;
-  return { req, res, user };
-}
-export type Context = Awaited<ReturnType<typeof createContext>>;
+export const contextFactory = (services: Services) =>
+  async function createContext({ req, res }: CreateExpressContextOptions) {
+    const token = readCookie(req, ACCESS_COOKIE);
+    const user: AuthUser | null = token ? await verifyAccessToken(token) : null;
+    return { req, res, user, services };
+  };
+export type Context = Awaited<ReturnType<ReturnType<typeof contextFactory>>>;
 
 // isDev false in production = error responses never include stack traces.
 const t = initTRPC.context<Context>().create({ isDev: !isProduction });

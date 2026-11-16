@@ -3,6 +3,7 @@ import { fetchWithRefresh } from "./trpc";
 export type StreamHandlers = {
   onToken: (text: string) => void;
   onNotice: (text: string) => void;
+  onSources: (sources: { documentId: string; title: string }[]) => void;
 };
 
 /**
@@ -11,7 +12,7 @@ export type StreamHandlers = {
  * Pass an AbortSignal to stop: the server then cancels the model call too.
  */
 export async function streamChat(
-  body: { conversationId: string; content: string; model: string },
+  body: { conversationId: string; content: string; model: string; useDocuments: boolean },
   handlers: StreamHandlers,
   signal: AbortSignal,
 ): Promise<void> {
@@ -40,9 +41,10 @@ export async function streamChat(
       const event = /^event: (.*)$/m.exec(block)?.[1];
       const raw = /^data: (.*)$/m.exec(block)?.[1];
       if (!event || !raw) continue;
-      const data = JSON.parse(raw) as { text?: string; message?: string };
+      const data = JSON.parse(raw) as { text?: string; message?: string; sources?: { documentId: string; title: string }[] };
       if (event === "token" && data.text) handlers.onToken(data.text);
       else if (event === "notice" && data.text) handlers.onNotice(data.text);
+      else if (event === "sources" && data.sources) handlers.onSources(data.sources);
       else if (event === "error") throw new Error(data.message ?? "The model could not answer.");
       else if (event === "done") return;
     }

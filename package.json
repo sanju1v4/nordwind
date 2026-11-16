@@ -10,6 +10,7 @@
     "typecheck": "npm run typecheck --workspaces",
     "migrate": "npm run migrate -w apps/api",
     "seed": "npm run seed -w apps/api",
-    "test": "npm run test -w apps/api"
+    "test": "npm run test -w apps/api",
+    "dev:worker": "npm run dev:worker -w apps/api"
   }
 }

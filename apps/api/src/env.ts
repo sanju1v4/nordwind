@@ -16,6 +16,14 @@ const schema = z.object({
   ANTHROPIC_MODEL: z.string().default("claude-haiku-4-5"),
   MISTRAL_API_KEY: z.string().optional(),
   MISTRAL_MODEL: z.string().default("mistral-small-latest"),
+
+  // Document storage (private S3 bucket). Credentials: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY,
+  // read automatically by the AWS SDK. Without S3_BUCKET the knowledge base is switched off.
+  S3_BUCKET: z.string().optional(),
+  AWS_REGION: z.string().default("eu-north-1"),
+
+  // Embeddings turn text into vectors for search. "demo" works offline with no API key.
+  EMBEDDINGS_PROVIDER: z.enum(["demo", "mistral", "openai"]).default("demo"),
 });
 
 const parsed = schema.safeParse(process.env);

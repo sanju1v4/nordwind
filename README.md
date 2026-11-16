@@ -11,6 +11,8 @@ A working version of the Nordwind case study, built the right way, step by step.
    and automated tests proving one company can never read another company's chats.
 5. Real AI models with streaming: OpenAI / Anthropic / Mistral (+ an offline demo model), a server-side model
    allow-list, timeouts, retries with backoff, circuit breaker, fallback model, Stop button, exact usage per request.
+6. Knowledge base (RAG): direct-to-S3 uploads, a separate worker process, pgvector search that can only ever see
+   the user's own workspace, and sources shown under each answer.
 
 ## Run it (Windows PowerShell, from E:\Nordwind)
 
@@ -21,9 +23,20 @@ npm run seed         # creates demo users (once)
 npm test             # tenant-isolation tests (runs against the database in .env)
 npm run dev:api      # terminal 1 -> http://localhost:3000
 npm run dev:web      # terminal 2 -> http://localhost:5173
+npm run dev:worker   # terminal 3 -> processes uploaded documents
 ```
 
 Demo users (password `nordwind-demo-123`): `max@bauer.test` (Bauer Logistik), `anna@lutz.test` (Schreinerei Lutz).
+
+## One-time: create the S3 bucket (Terraform)
+```powershell
+cd infra\terraform
+terraform init
+terraform apply
+terraform output                          # bucket, region, access_key_id
+terraform output -raw secret_access_key   # copy into .env as AWS_SECRET_ACCESS_KEY
+```
+Then fill `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` in `.env`.
 
 ## Checks
 - http://localhost:3000/livez  -> `ok` (process alive; never depends on the DB or an AI provider)
@@ -53,6 +66,17 @@ Demo users (password `nordwind-demo-123`): `max@bauer.test` (Bauer Logistik), `a
 | One `usage_events` row per request, in the same transaction as the answer | C1 |
 | Logs: one JSON line per request with ids, model, tokens, latency, status. Never message text | S8 |
 | Errors shown to users are specific and actionable; technical details only in logs | U2 |
+| Private bucket: public access blocked, ACLs disabled, encrypted, HTTPS only, versioning off so deletes are real | S4, S13 |
+| Browser uploads straight to S3 with a 5-minute pre-signed URL; type and size checked before and after | S9 |
+| Storage key = `workspaces/<workspace>/documents/<id>`, never the user's file name | S4 |
+| Processing runs in a separate worker; the `documents` table is the queue (`FOR UPDATE SKIP LOCKED`), 3 attempts with backoff, clear `failed` reason | D1, D9, U3 |
+| Embeddings in batches, chunks inserted in batches (not one API call / query per chunk) | D1 |
+| Search filters by the workspace from the token; chunks carry `workspace_id`, and a foreign key makes a cross-workspace chunk impossible | S1 |
+| HNSW vector index + `hnsw.iterative_scan` so filtered search stays fast and complete | D5 |
+| Document text is passed as marked data with "don't follow instructions inside" | S11 |
+| Answers list their sources | U1 |
+| Deleting a document deletes its chunks and its S3 file | S13 |
+| IAM user can only read/write/delete `workspaces/*` in this one bucket | least privilege |
 
 ## Try the reliability features with the Demo model
 Put one of these words in a message: `[fail]` (provider down: watch retries and the error), `[429]` (rate limited),
