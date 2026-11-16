@@ -3,7 +3,7 @@
 #   - EC2 server with NO inbound ports: admin access and deploys only through AWS Systems Manager (SSM)
 #   - The server's IAM role gives pods S3 access: no AWS access keys inside the cluster
 #   - Amazon ECR repositories with immutable tags (every image = one Git commit) and vulnerability scans
-#   - GitHub Actions deploys with short-lived OIDC credentials: no AWS keys stored in GitHub
+#   - GitHub Actions deploys as a narrowly scoped IAM user (OIDC is blocked by this account's org policy)
 #   - A private S3 bucket holding each release's manifests
 #
 #   cd infra\cluster
@@ -314,37 +314,26 @@ resource "aws_instance" "node" {
 }
 
 # ---------------------------------------------------------------------------
-# GitHub Actions -> AWS without stored keys (OIDC)
+# GitHub Actions -> AWS: a deploy user that can do exactly one job
 # ---------------------------------------------------------------------------
-resource "aws_iam_openid_connect_provider" "github" {
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1", "1c58a3a8518e8759bf075b76b750d4f2df264fcd"]
+# Ideal: GitHub OIDC (short-lived credentials, no stored keys). This AWS account sits in an
+# organisation whose service control policy denies iam:CreateOpenIDConnectProvider, so we use
+# an IAM user instead and limit the damage a leaked key could do:
+#   - it can only push to the 2 Nordwind ECR repos, upload releases, and run a command on THIS server
+#   - the key lives only in GitHub encrypted Secrets and in the local (git-ignored) Terraform state
+#   - rotate it with: terraform apply -replace=aws_iam_access_key.deploy  (then update the 2 secrets)
+resource "aws_iam_user" "deploy" {
+  name = "nordwind-github-deploy-${random_id.suffix.hex}"
+  tags = { GitHubRepo = var.github_repo }
 }
 
-# Only workflows running on the main branch of YOUR repository can assume this role.
-resource "aws_iam_role" "deploy" {
-  name                 = "nordwind-github-deploy-${random_id.suffix.hex}"
-  max_session_duration = 3600
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
-      Action    = "sts:AssumeRoleWithWebIdentity"
-      Condition = {
-        StringEquals = {
-          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/main"
-        }
-      }
-    }]
-  })
+resource "aws_iam_access_key" "deploy" {
+  user = aws_iam_user.deploy.name
 }
 
-resource "aws_iam_role_policy" "deploy" {
+resource "aws_iam_user_policy" "deploy" {
   name = "nordwind-deploy"
-  role = aws_iam_role.deploy.id
+  user = aws_iam_user.deploy.name
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -394,12 +383,24 @@ resource "aws_iam_role_policy" "deploy" {
 output "github_variables" {
   description = "Repository variables for .github/workflows/ci.yml"
   value = {
-    AWS_REGION          = var.region
-    AWS_DEPLOY_ROLE_ARN = aws_iam_role.deploy.arn
-    ECR_REGISTRY        = local.registry
-    DEPLOY_BUCKET       = aws_s3_bucket.deploy.bucket
-    INSTANCE_ID         = aws_instance.node.id
+    AWS_REGION    = var.region
+    ECR_REGISTRY  = local.registry
+    DEPLOY_BUCKET = aws_s3_bucket.deploy.bucket
+    INSTANCE_ID   = aws_instance.node.id
   }
+}
+
+# Secrets (Settings > Secrets and variables > Actions > Secrets), copied without showing them:
+#   terraform output -raw deploy_access_key_id     | Set-Clipboard
+#   terraform output -raw deploy_secret_access_key | Set-Clipboard
+output "deploy_access_key_id" {
+  value     = aws_iam_access_key.deploy.id
+  sensitive = true
+}
+
+output "deploy_secret_access_key" {
+  value     = aws_iam_access_key.deploy.secret
+  sensitive = true
 }
 
 output "instance_id" {

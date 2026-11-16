@@ -14,7 +14,7 @@ A working version of the Nordwind case study, built the right way, step by step.
 6. Knowledge base (RAG): direct-to-S3 uploads, a separate worker process, pgvector search that can only ever see
    the user's own workspace, and sources shown under each answer.
 7. Containers + CI/CD: non-root multi-stage images, GitHub Actions (tests on real Postgres + pgvector, images tagged
-   with the commit SHA in Amazon ECR, deploy through AWS Systems Manager, OIDC instead of stored AWS keys).
+   with the commit SHA in Amazon ECR, deploy through AWS Systems Manager, a narrowly scoped deploy user; GitHub OIDC is blocked by this account's org policy).
 8. Kubernetes (k3s on one EC2 server, no open ports): probes, resource limits, HPA, PDBs, NetworkPolicies,
    Pod Security "restricted", migrations as a Job before each rollout, automatic rollback.
 9. Observability: Prometheus metrics (HTTP, time to first token, provider errors, circuit breakers, tokens,
@@ -111,7 +111,9 @@ You -> SSM port-forwarding tunnel -> http://localhost:8080 (app), /grafana, /pro
    `terraform apply -var "github_repo=<user>/nordwind" -var "documents_bucket=<bucket>"`
 3. App settings to Parameter Store: `uv run --no-project python scripts\push_config.py` (from E:\Nordwind).
 4. GitHub repository variables: copy `terraform output github_variables` into
-   Settings > Secrets and variables > Actions > Variables.
+   Settings > Secrets and variables > Actions > Variables. Then the 2 secrets `AWS_ACCESS_KEY_ID` and
+   `AWS_SECRET_ACCESS_KEY` under the Secrets tab, copied without showing them:
+   `terraform output -raw deploy_access_key_id | Set-Clipboard` (same for `deploy_secret_access_key`).
 5. Push to main (or run the workflow manually): the pipeline builds and deploys.
 
 ### Daily use
