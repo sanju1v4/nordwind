@@ -13,7 +13,7 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   ANTHROPIC_API_KEY: z.string().optional(),
-  ANTHROPIC_MODEL: z.string().default("claude-haiku-4-5"),
+  ANTHROPIC_MODEL: z.string().default("claude-haiku-5-5"),
   MISTRAL_API_KEY: z.string().optional(),
   MISTRAL_MODEL: z.string().default("mistral-small-latest"),
 

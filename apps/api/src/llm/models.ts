@@ -14,10 +14,14 @@ export type ModelConfig = {
   fallback?: string; // model id to use if this one is unavailable (case study R5)
 };
 
-/** The one list of models this server knows. The browser can never pick anything else (case study S10). */
+/**
+ * The one list of models this server knows. The browser can never pick anything else (case study S10).
+ * GPT and Claude back each other up (one level only: a fallback never falls back again).
+ * For strict EU-only customers, point both fallbacks at "mistral" instead.
+ */
 export const MODELS: ModelConfig[] = [
-  { id: "gpt", label: "GPT (OpenAI)", provider: "openai", upstream: env.OPENAI_MODEL, firstTokenTimeoutMs: 15_000, totalTimeoutMs: 120_000, fallback: "mistral" },
-  { id: "claude", label: "Claude (Anthropic)", provider: "anthropic", upstream: env.ANTHROPIC_MODEL, firstTokenTimeoutMs: 15_000, totalTimeoutMs: 120_000, fallback: "mistral" },
+  { id: "gpt", label: "GPT (OpenAI)", provider: "openai", upstream: env.OPENAI_MODEL, firstTokenTimeoutMs: 15_000, totalTimeoutMs: 120_000, fallback: "claude" },
+  { id: "claude", label: "Claude (Anthropic)", provider: "anthropic", upstream: env.ANTHROPIC_MODEL, firstTokenTimeoutMs: 15_000, totalTimeoutMs: 120_000, fallback: "gpt" },
   { id: "mistral", label: "Mistral (EU)", provider: "mistral", upstream: env.MISTRAL_MODEL, firstTokenTimeoutMs: 15_000, totalTimeoutMs: 120_000 },
   { id: "demo", label: "Demo model (offline)", provider: "mock", upstream: "mock", firstTokenTimeoutMs: 5_000, totalTimeoutMs: 30_000 },
 ];
