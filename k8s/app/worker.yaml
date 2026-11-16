@@ -1,0 +1,53 @@
+# The document worker: same image as the API, different command. Scales independently (case study D9).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: nordwind
+  labels: { app: worker }
+spec:
+  replicas: 1 # more workers are safe: jobs are claimed with FOR UPDATE SKIP LOCKED
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app: worker }
+  template:
+    metadata:
+      labels: { app: worker }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        prometheus.io/path: /metrics
+    spec:
+      imagePullSecrets: [{ name: ecr-pull }]
+      terminationGracePeriodSeconds: 300 # let the current document finish before the pod is killed
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: worker
+          image: ${IMAGE_API}
+          command: ["node", "dist/worker.js"]
+          ports: [{ name: metrics, containerPort: 9100 }]
+          env:
+            - { name: NODE_ENV, value: production }
+          envFrom:
+            - secretRef: { name: nordwind-env }
+          # /livez fails only if the worker loop has been stuck for 10 minutes: then a restart helps.
+          livenessProbe:
+            httpGet: { path: /livez, port: metrics }
+            periodSeconds: 30
+            failureThreshold: 3
+          # PDF parsing of big files needs memory; the limit protects the node if one file is a "bomb" (case study S9).
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 768Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }

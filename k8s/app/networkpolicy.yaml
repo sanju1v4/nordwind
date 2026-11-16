@@ -1,0 +1,43 @@
+# Zero trust inside the cluster: nothing may connect to our pods unless allowed below.
+# (Outgoing traffic stays open: the app needs Neon, the AI providers and S3.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: nordwind
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# The ingress controller (Traefik, in kube-system) may reach the API and the web server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-ingress
+  namespace: nordwind
+spec:
+  podSelector:
+    matchExpressions: [{ key: app, operator: In, values: [api, web] }]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+---
+# Prometheus may scrape metrics from the API and the worker.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus
+  namespace: nordwind
+spec:
+  podSelector:
+    matchExpressions: [{ key: app, operator: In, values: [api, worker] }]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: monitoring }
+      ports:
+        - { port: 3000 }
+        - { port: 9100 }

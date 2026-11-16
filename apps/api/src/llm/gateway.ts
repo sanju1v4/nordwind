@@ -1,5 +1,6 @@
 import type { ModelConfig } from "./models.js";
 import { ProviderError, type ChatMessage, type Provider, type StreamChunk } from "./types.js";
+import { circuitOpen, errorReason, llmProviderErrors } from "../metrics.js";
 
 /**
  * The reliability layer between our app and the AI providers (case study R3, R4, R5).
@@ -93,6 +94,7 @@ export function createGateway(providers: Record<string, Provider>, options: Part
 
     for (let attempt = 0; ; attempt++) {
       if (!breaker.canRequest()) {
+        llmProviderErrors.inc({ provider: model.provider, reason: "circuit_open" });
         throw new ProviderError(`${model.provider} is temporarily unavailable (circuit open)`, null, "circuit_open");
       }
 
@@ -114,6 +116,7 @@ export function createGateway(providers: Record<string, Provider>, options: Part
           yield chunk;
         }
         breaker.recordSuccess();
+        circuitOpen.set({ provider: model.provider }, 0);
         return;
       } catch (err) {
         if (userSignal.aborted) throw err; // the user stopped it: not the provider's fault, no retry
@@ -124,7 +127,9 @@ export function createGateway(providers: Record<string, Provider>, options: Part
               ? err
               : new ProviderError(`${model.provider}: ${(err as Error).message}`, null);
 
+        llmProviderErrors.inc({ provider: model.provider, reason: errorReason(error.status, error.kind) });
         if (error.retryable) breaker.recordFailure(); // 4xx like a bad request is OUR bug, not provider health
+        circuitOpen.set({ provider: model.provider }, breaker.isOpen ? 1 : 0);
         const canRetry = error.retryable && !gotText && attempt < opts.maxRetries && !breaker.isOpen;
         if (!canRetry) throw error;
         await sleep(backoffMs(attempt, opts, error.retryAfterMs), userSignal);

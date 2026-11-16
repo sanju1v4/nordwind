@@ -9,6 +9,7 @@ import { createGateway } from "../llm/gateway.js";
 import { ProviderError, type ChatMessage, type Provider } from "../llm/types.js";
 import { searchChunks, type FoundChunk } from "../documents/search.js";
 import type { Services } from "../trpc.js";
+import { chatDuration, chatFirstToken, chatRequests, llmFallbacks, llmTokens } from "../metrics.js";
 
 const SYSTEM_PROMPT =
   "You are Nordwind, a helpful assistant for employees of small and mid-sized companies. Answer clearly and concisely.";
@@ -144,10 +145,12 @@ export function chatStreamRouter(providers: Record<string, Provider>, services: 
     let outputTokens = 0;
     let status: "ok" | "error" | "aborted" = "ok";
     let errorForLog: string | undefined;
+    let firstTokenAt: number | null = null;
 
     try {
       for await (const ev of gateway.stream(model, allowed, messages, abort.signal)) {
         if (ev.type === "text") {
+          if (firstTokenAt === null) firstTokenAt = Date.now();
           text += ev.text;
           send("token", { text: ev.text });
         } else if (ev.type === "usage") {
@@ -156,6 +159,7 @@ export function chatStreamRouter(providers: Record<string, Provider>, services: 
         } else if (ev.type === "fallback") {
           usedModel = allowed.find((m) => m.id === ev.to) ?? usedModel;
           errorForLog = ev.reason;
+          llmFallbacks.inc({ from: ev.from, to: ev.to });
           send("notice", { text: `${model.label} is unavailable right now, so ${usedModel.label} answered instead.` });
         }
       }
@@ -192,6 +196,12 @@ export function chatStreamRouter(providers: Record<string, Provider>, services: 
     } finally {
       client.release();
     }
+
+    chatRequests.inc({ model: usedModel.id, status });
+    chatDuration.observe({ model: usedModel.id, status }, (Date.now() - started) / 1000);
+    if (firstTokenAt !== null) chatFirstToken.observe({ model: usedModel.id }, (firstTokenAt - started) / 1000);
+    llmTokens.inc({ model: usedModel.id, direction: "input" }, inputTokens);
+    llmTokens.inc({ model: usedModel.id, direction: "output" }, outputTokens);
 
     logRequest({
       workspaceId: user.workspaceId,

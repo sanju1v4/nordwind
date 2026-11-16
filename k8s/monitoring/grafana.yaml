@@ -1,0 +1,54 @@
+# Grafana with Prometheus as data source and the Nordwind dashboard pre-installed (dashboards as code).
+# Admin password comes from AWS Parameter Store (/nordwind/grafana/admin-password) via deploy.sh.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: grafana
+  namespace: kube-system
+spec:
+  repo: https://grafana.github.io/helm-charts
+  chart: grafana
+  targetNamespace: monitoring
+  valuesContent: |-
+    admin:
+      existingSecret: grafana-admin
+      userKey: admin-user
+      passwordKey: admin-password
+    grafana.ini:
+      server:
+        root_url: http://localhost:8080/grafana/
+        serve_from_sub_path: true
+      analytics:
+        reporting_enabled: false
+        check_for_updates: false
+      users:
+        allow_sign_up: false
+    persistence:
+      enabled: false              # everything is provisioned from code; nothing to lose
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 384Mi }
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            uid: prometheus
+            type: prometheus
+            access: proxy
+            url: http://prometheus-server.monitoring.svc.cluster.local/prometheus
+            isDefault: true
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+          - name: nordwind
+            orgId: 1
+            folder: Nordwind
+            type: file
+            disableDeletion: true
+            editable: true
+            options:
+              path: /var/lib/grafana/dashboards/nordwind
+    dashboardsConfigMaps:
+      nordwind: nordwind-dashboards

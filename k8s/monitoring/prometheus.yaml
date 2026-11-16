@@ -1,0 +1,85 @@
+# Prometheus, installed by k3s's built-in Helm controller (no Helm CLI needed).
+# Scrapes every pod with the annotation prometheus.io/scrape: "true", plus node and container metrics.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: prometheus
+  namespace: kube-system
+spec:
+  repo: https://prometheus-community.github.io/helm-charts
+  chart: prometheus
+  targetNamespace: monitoring
+  valuesContent: |-
+    alertmanager:
+      enabled: false              # alerts are visible in Prometheus and Grafana; add Alertmanager to page someone
+    prometheus-pushgateway:
+      enabled: false
+    kube-state-metrics:
+      enabled: true               # pod restarts, deployment status
+    prometheus-node-exporter:
+      enabled: true               # machine CPU, memory, disk
+    server:
+      prefixURL: /prometheus      # served behind the ingress at /prometheus
+      baseURL: http://localhost:8080/prometheus
+      retention: 7d
+      global:
+        scrape_interval: 30s
+        evaluation_interval: 30s
+      persistentVolume:
+        enabled: true
+        size: 5Gi
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { memory: 1Gi }
+    serverFiles:
+      alerting_rules.yml:
+        groups:
+          - name: nordwind-slo
+            rules:
+              # SLO: 99.5% of chat answers succeed -> error budget 0.5%.
+              # Multi-window burn-rate alerts (Google SRE workbook): fire only when the budget burns fast
+              # over BOTH a long and a short window, so one bad minute doesn't page anyone,
+              # and the alert clears quickly once the problem is fixed.
+              - alert: ChatErrorBudgetBurnFast
+                expr: |
+                  (sum(rate(nordwind_chat_requests_total{status="error"}[1h])) / sum(rate(nordwind_chat_requests_total[1h]))) > (14.4 * 0.005)
+                  and
+                  (sum(rate(nordwind_chat_requests_total{status="error"}[5m])) / sum(rate(nordwind_chat_requests_total[5m]))) > (14.4 * 0.005)
+                labels: { severity: page }
+                annotations:
+                  summary: "Chat errors are burning the monthly error budget 14x too fast"
+                  description: "At this rate the 30-day budget is gone in ~2 days. Check provider errors and circuit breakers on the Nordwind dashboard."
+              - alert: ChatErrorBudgetBurnSlow
+                expr: |
+                  (sum(rate(nordwind_chat_requests_total{status="error"}[6h])) / sum(rate(nordwind_chat_requests_total[6h]))) > (6 * 0.005)
+                  and
+                  (sum(rate(nordwind_chat_requests_total{status="error"}[30m])) / sum(rate(nordwind_chat_requests_total[30m]))) > (6 * 0.005)
+                labels: { severity: ticket }
+                annotations:
+                  summary: "Chat errors are slowly eating the error budget"
+              # SLO: 95% of answers start within 5 seconds.
+              - alert: ChatFirstTokenSlow
+                expr: histogram_quantile(0.95, sum by (le) (rate(nordwind_chat_time_to_first_token_seconds_bucket[10m]))) > 5
+                for: 10m
+                labels: { severity: ticket }
+                annotations:
+                  summary: "p95 time to first token is above 5 seconds"
+          - name: nordwind-operations
+            rules:
+              - alert: LLMProviderCircuitOpen
+                expr: max by (provider) (nordwind_llm_circuit_open) == 1
+                for: 2m
+                labels: { severity: ticket }
+                annotations:
+                  summary: "Circuit breaker for {{ $labels.provider }} is open: requests use the fallback or fail fast"
+              - alert: DocumentQueueBacklog
+                expr: sum(nordwind_document_queue{status="queued"}) > 20
+                for: 15m
+                labels: { severity: ticket }
+                annotations:
+                  summary: "More than 20 documents waiting for 15 minutes: scale the worker or check its logs"
+              - alert: PodRestarting
+                expr: increase(kube_pod_container_status_restarts_total{namespace="nordwind"}[30m]) > 3
+                labels: { severity: ticket }
+                annotations:
+                  summary: "{{ $labels.pod }} restarted more than 3 times in 30 minutes (probe failures or OOMKilled?)"

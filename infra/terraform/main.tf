@@ -28,7 +28,7 @@ variable "region" {
 variable "allowed_origins" {
   description = "Web app origins allowed to upload directly from the browser (pre-signed PUT)."
   type        = list(string)
-  default     = ["http://localhost:5173"]
+  default     = ["http://localhost:5173", "http://localhost:8080"] # local dev server, and the cluster via SSM tunnel
 }
 
 # Bucket names are global across all AWS accounts, so add a random suffix.

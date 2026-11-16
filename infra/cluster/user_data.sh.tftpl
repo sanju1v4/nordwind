@@ -1,0 +1,52 @@
+#!/bin/bash
+# Runs once when the server first boots (Amazon Linux 2023). This file is a Terraform template:
+# "registry" and "region" below are filled in by Terraform. Progress: sudo cat /var/log/cloud-init-output.log
+set -euxo pipefail
+
+# --- k3s: a complete, lightweight Kubernetes (includes Traefik ingress, metrics-server, local storage, Helm controller)
+curl -sfL https://get.k3s.io | \
+  INSTALL_K3S_CHANNEL=stable \
+  INSTALL_K3S_SKIP_SELINUX_RPM=true \
+  sh -s - server \
+    --write-kubeconfig-mode 600 \
+    --secrets-encryption
+
+until /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes >/dev/null 2>&1; do sleep 5; done
+
+# --- ECR login tokens expire after 12 hours: refresh the image pull secret every 6 hours,
+#     so pods can still be (re)started long after the last deploy.
+cat > /usr/local/bin/nordwind-ecr-refresh <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+kubectl get namespace nordwind >/dev/null 2>&1 || exit 0   # nothing deployed yet
+kubectl -n nordwind create secret docker-registry ecr-pull \
+  --docker-server="${registry}" --docker-username=AWS \
+  --docker-password="$(aws ecr get-login-password --region ${region})" \
+  --dry-run=client -o yaml | kubectl apply -f -
+SCRIPT
+chmod 700 /usr/local/bin/nordwind-ecr-refresh
+
+cat > /etc/systemd/system/nordwind-ecr-refresh.service <<'UNIT'
+[Unit]
+Description=Refresh the ECR image pull secret for Nordwind
+After=k3s.service
+[Service]
+Type=oneshot
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/nordwind-ecr-refresh
+UNIT
+
+cat > /etc/systemd/system/nordwind-ecr-refresh.timer <<'UNIT'
+[Unit]
+Description=Refresh the ECR image pull secret every 6 hours
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=6h
+[Install]
+WantedBy=timers.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now nordwind-ecr-refresh.timer
+echo "nordwind node ready"

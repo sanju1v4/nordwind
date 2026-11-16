@@ -1,0 +1,14 @@
+# Keep the build context small and secret-free (case study S12):
+# no .env, no Terraform state, no local node_modules, no git history.
+**/node_modules
+**/dist
+.env
+.env.*
+!.env.example
+infra
+**/*.tfstate*
+.git
+.github
+**/.vite
+scripts
+*.md

@@ -7,6 +7,7 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is missing in .env"),
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 random characters (see .env.example)"),
   API_PORT: z.coerce.number().default(3000),
+  WORKER_METRICS_PORT: z.coerce.number().default(9100),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
   // AI providers. Each one is optional: a model only appears in the app if its provider key is set.

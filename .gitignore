@@ -6,3 +6,6 @@ dist/
 *.tfstate
 *.tfstate.*
 *.tfplan
+
+# Files downloaded from Claude chats
+Claude outputs/

@@ -1,0 +1,38 @@
+# Database migrations run ONCE per deploy, before the new pods start (case study R7).
+# If this Job fails, deploy.sh stops and the old version keeps running.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: nordwind
+  labels: { app: migrate }
+spec:
+  backoffLimit: 0 # a failed migration needs a human, not an automatic retry
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: migrate }
+    spec:
+      restartPolicy: Never
+      imagePullSecrets: [{ name: ecr-pull }]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: migrate
+          image: ${IMAGE_API}
+          command: ["node", "dist/scripts/migrate.js"]
+          env:
+            - { name: NODE_ENV, value: production }
+          envFrom:
+            - secretRef: { name: nordwind-env }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }

@@ -1,0 +1,160 @@
+# CI/CD for Nordwind (fixes case study O1-O3):
+#   every pull request and push:  typecheck + tests against a real Postgres with pgvector + web build
+#   every push to main:           build images tagged with the commit SHA -> push to Amazon ECR -> deploy to k3s
+# AWS access uses GitHub's OIDC token for short-lived credentials: no AWS keys stored in GitHub.
+# Deploys go through AWS Systems Manager: the server has no open ports, no SSH keys exist.
+#
+# Repository variables (Settings > Secrets and variables > Actions > Variables), from `terraform output`
+# in infra/cluster: AWS_REGION, AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY, DEPLOY_BUCKET, INSTANCE_ID.
+# Until AWS_DEPLOY_ROLE_ARN is set, only the test job runs.
+
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nordwind
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/nordwind
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Throwaway secrets for this run
+        run: |
+          echo "JWT_SECRET=$(openssl rand -base64 48)" >> "$GITHUB_ENV"
+          touch .env   # local scripts read .env; in CI the real values come from the environment
+      - run: npm run typecheck
+      - run: npm run migrate
+      - run: npm test
+      - run: npm run build -w apps/web
+      - name: Known vulnerabilities in production dependencies
+        run: npm audit --omit=dev --audit-level=critical
+        continue-on-error: true # visible in the run, but doesn't block a deploy on its own
+
+  build:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # lets this job ask GitHub for an OIDC token to exchange for AWS credentials
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+      # Tags are the commit SHA and ECR tags are immutable: you always know exactly what runs,
+      # and rolling back means deploying an older SHA (case study O2: no more ":latest").
+      - name: API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/nordwind-api:${{ github.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+      - name: Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/nordwind-web:${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-production # never two deploys at the same time
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      REGISTRY: ${{ vars.ECR_REGISTRY }}
+      BUCKET: ${{ vars.DEPLOY_BUCKET }}
+      INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Render manifests with this commit's images
+        run: |
+          mkdir release
+          cp -R k8s/. release/
+          export IMAGE_API="$REGISTRY/nordwind-api:$SHA" IMAGE_WEB="$REGISTRY/nordwind-web:$SHA"
+          find release -name '*.yaml' -print0 | while IFS= read -r -d '' f; do
+            # shellcheck disable=SC2016 # single quotes on purpose: envsubst replaces ONLY these two variables
+            envsubst '${IMAGE_API} ${IMAGE_WEB}' < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          done
+          # -F: match the literal text "${IMAGE_" (as a regex it would silently match nothing)
+          # shellcheck disable=SC2016 # literal text on purpose
+          if grep -rnF '${IMAGE_' release; then
+            echo "::error::unreplaced image placeholders in the manifests"; exit 1
+          fi
+      - name: Upload release to S3
+        run: aws s3 cp release "s3://$BUCKET/releases/$SHA/" --recursive --only-show-errors
+      - name: Deploy on the server via AWS Systems Manager
+        run: |
+          cat > params.json <<JSON
+          {"commands": [
+            "set -euo pipefail",
+            "rm -rf /tmp/nordwind-release && mkdir -p /tmp/nordwind-release",
+            "aws s3 cp s3://$BUCKET/releases/$SHA/ /tmp/nordwind-release/ --recursive --only-show-errors --region $AWS_REGION",
+            "AWS_REGION=$AWS_REGION bash /tmp/nordwind-release/deploy.sh $REGISTRY"
+          ]}
+          JSON
+          id=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript \
+                 --comment "deploy ${SHA:0:12}" --timeout-seconds 900 --parameters file://params.json \
+                 --query Command.CommandId --output text)
+          echo "SSM command $id"
+          status=Pending
+          for _ in $(seq 1 180); do
+            sleep 5
+            status=$(aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
+                       --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE_ID" \
+            --query '[StandardOutputContent, StandardErrorContent]' --output text
+          echo "Deploy status: $status"
+          [ "$status" = "Success" ]

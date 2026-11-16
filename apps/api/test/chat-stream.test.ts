@@ -173,3 +173,22 @@ describe("POST /api/chat/stream", () => {
     }
   });
 });
+
+describe("GET /metrics", () => {
+  it("counts chat answers by model and outcome", async () => {
+    const { user, cookie } = await makeUser("metrics");
+    const chatId = await newChat(user);
+    await events(await post(cookie, { conversationId: chatId, content: "hi", model: "demo" }));
+    const text = await (await fetch(`${base}/metrics`)).text();
+    expect(text).toMatch(/nordwind_chat_requests_total\{model="demo",status="ok"\} [1-9]/);
+    expect(text).toContain("nordwind_chat_time_to_first_token_seconds_bucket");
+  });
+
+  it("never turns random URLs into label values (bounded cardinality)", async () => {
+    const res = await fetch(`${base}/trpc/some.random.${randomUUID()}`);
+    await res.text(); // let the response finish, so its timing is recorded
+    const text = await (await fetch(`${base}/metrics`)).text();
+    expect(text).toContain('route="trpc:unknown"');
+    expect(text).not.toMatch(/route="trpc:some\.random/);
+  });
+});

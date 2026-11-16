@@ -3,6 +3,7 @@ import cookieParser from "cookie-parser";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./router.js";
 import { contextFactory, type Services } from "./trpc.js";
+import { httpDuration, registry } from "./metrics.js";
 import { db } from "./db.js";
 import { chatStreamRouter } from "./routes/chatStream.js";
 import type { ModelConfig } from "./llm/models.js";
@@ -22,6 +23,27 @@ export function createApp(providers: Record<string, Provider>, services: Service
   const app = express();
   app.disable("x-powered-by");
   app.use(cookieParser());
+
+  // Time every request. The route label is a known name, never the raw URL (bounded label values).
+  const procedures = new Set(Object.keys(appRouter._def.procedures));
+  app.use((req, res, next) => {
+    if (req.path === "/metrics" || req.path === "/livez" || req.path === "/readyz" || req.path === "/api/chat/stream") return next();
+    const end = httpDuration.startTimer();
+    const path = req.path; // read NOW: Express strips the "/trpc" mount prefix from req.path during routing
+    res.on("finish", () => {
+      const name = path.startsWith("/trpc/") ? path.slice(6) : path;
+      const route = path.startsWith("/trpc/") ? (procedures.has(name) ? `trpc:${name}` : "trpc:unknown")
+        : ["/auth/refresh", "/auth/logout"].includes(path) ? path : "other";
+      end({ method: req.method, route, status: String(res.statusCode) });
+    });
+    next();
+  });
+
+  // Prometheus scrapes this inside the cluster. The Ingress never routes /metrics to the internet.
+  app.get("/metrics", async (_req, res) => {
+    res.set("content-type", registry.contentType);
+    res.send(await registry.metrics());
+  });
 
   // The browser reaches the API through the Vite dev proxy (same origin), so no CORS setup is needed.
 

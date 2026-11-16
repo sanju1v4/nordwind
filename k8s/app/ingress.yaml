@@ -1,0 +1,16 @@
+# One entry point (k3s ships with the Traefik ingress controller).
+# Browser and API share one origin, so cookies work without CORS. /metrics is deliberately NOT routed:
+# it is only reachable inside the cluster, for Prometheus.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nordwind
+  namespace: nordwind
+spec:
+  rules:
+    - http:
+        paths:
+          - { path: /trpc, pathType: Prefix, backend: { service: { name: api, port: { number: 3000 } } } }
+          - { path: /auth, pathType: Prefix, backend: { service: { name: api, port: { number: 3000 } } } }
+          - { path: /api, pathType: Prefix, backend: { service: { name: api, port: { number: 3000 } } } }
+          - { path: /, pathType: Prefix, backend: { service: { name: web, port: { number: 8080 } } } }

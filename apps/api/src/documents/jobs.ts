@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import type { FileStorage } from "./storage.js";
 import { toVector, type Embedder } from "./embeddings.js";
 import { chunkText, extractTextFrom } from "./extract.js";
+import { documentJobDuration, documentJobs } from "../metrics.js";
 
 export const MAX_ATTEMPTS = 3;
 const STUCK_AFTER = "10 minutes"; // a 'processing' job older than this belongs to a crashed worker
@@ -73,6 +74,8 @@ export async function processNextJob(deps: JobDeps): Promise<boolean> {
     } finally {
       client.release();
     }
+    documentJobs.inc({ status: "ready" });
+    documentJobDuration.observe((Date.now() - started) / 1000);
     log({ documentId: job.id, workspaceId: job.workspace_id, status: "ready", chunks: pieces.length, ms: Date.now() - started });
   } catch (err) {
     const message = (err as Error).message;
@@ -85,6 +88,7 @@ export async function processNextJob(deps: JobDeps): Promise<boolean> {
         WHERE id = $1`,
       [job.id, final ? "failed" : "queued", final ? friendlyError(message) : null, delay],
     );
+    documentJobs.inc({ status: final ? "failed" : "retry" });
     log({ documentId: job.id, workspaceId: job.workspace_id, status: final ? "failed" : "retry", attempt: job.attempts, error: message, ms: Date.now() - started });
   }
   return true;

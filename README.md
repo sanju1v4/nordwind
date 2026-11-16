@@ -13,6 +13,12 @@ A working version of the Nordwind case study, built the right way, step by step.
    allow-list, timeouts, retries with backoff, circuit breaker, fallback model, Stop button, exact usage per request.
 6. Knowledge base (RAG): direct-to-S3 uploads, a separate worker process, pgvector search that can only ever see
    the user's own workspace, and sources shown under each answer.
+7. Containers + CI/CD: non-root multi-stage images, GitHub Actions (tests on real Postgres + pgvector, images tagged
+   with the commit SHA in Amazon ECR, deploy through AWS Systems Manager, OIDC instead of stored AWS keys).
+8. Kubernetes (k3s on one EC2 server, no open ports): probes, resource limits, HPA, PDBs, NetworkPolicies,
+   Pod Security "restricted", migrations as a Job before each rollout, automatic rollback.
+9. Observability: Prometheus metrics (HTTP, time to first token, provider errors, circuit breakers, tokens,
+   document queue), a Grafana dashboard as code, and SLO burn-rate alerts.
 
 ## Run it (Windows PowerShell, from E:\Nordwind)
 
@@ -82,3 +88,38 @@ Then fill `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY
 Put one of these words in a message: `[fail]` (provider down: watch retries and the error), `[429]` (rate limited),
 `[slow]` (first token never arrives in time: watch the timeout).
 | No stack traces in production error responses | - |
+
+## Production on AWS (steps 7-9)
+
+```
+GitHub push to main
+  -> GitHub Actions: typecheck, tests (Postgres + pgvector), web build
+  -> build images (tag = commit SHA) -> Amazon ECR (immutable tags, scanned)
+  -> render k8s/ with those images -> S3 release bucket
+  -> AWS Systems Manager runs k8s/deploy.sh on the server:
+       config from Parameter Store -> migrations Job -> rolling update -> rollback if unhealthy
+
+EC2 (no inbound ports) running k3s:
+  Traefik ingress -> web (nginx) | api (2-4 pods, HPA) | worker | Prometheus | Grafana
+  pods -> Neon Postgres, AI providers, S3 (via the server's IAM role, no keys)
+You -> SSM port-forwarding tunnel -> http://localhost:8080 (app), /grafana, /prometheus
+```
+
+### One-time setup
+1. Documents bucket CORS for the tunnel URL: `cd infra\terraform` then `terraform apply` (adds http://localhost:8080).
+2. Cluster: `cd infra\cluster` then
+   `terraform apply -var "github_repo=<user>/nordwind" -var "documents_bucket=<bucket>"`
+3. App settings to Parameter Store: `uv run --no-project python scripts\push_config.py` (from E:\Nordwind).
+4. GitHub repository variables: copy `terraform output github_variables` into
+   Settings > Secrets and variables > Actions > Variables.
+5. Push to main (or run the workflow manually): the pipeline builds and deploys.
+
+### Daily use
+| Task | Command (PowerShell, `--profile nordwind --region eu-north-1`) |
+| --- | --- |
+| Open the app | `terraform -chdir=infra\cluster output -raw open_app_tunnel` then run it; open http://localhost:8080 |
+| Grafana / Prometheus | same tunnel: http://localhost:8080/grafana, http://localhost:8080/prometheus |
+| Shell on the server | `terraform -chdir=infra\cluster output -raw shell_on_server`, then `sudo kubectl -n nordwind get pods` |
+| Roll back | re-run an older successful workflow run, or on the server: `sudo kubectl -n nordwind rollout undo deploy/api` |
+| Stop paying for the server | `aws ec2 stop-instances --instance-ids <id>` (start again with `start-instances`) |
+| Delete everything | `terraform destroy` in infra\cluster, then infra\terraform |
