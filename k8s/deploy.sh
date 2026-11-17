@@ -80,14 +80,34 @@ done
 [ "${ok:-0}" -ge 1 ] || { log "migrations timed out"; exit 1; }
 kubectl -n "$NS" logs job/migrate --tail=20 || true
 
+# Everything you need to debug a failed rollout, in the deploy log (no SSH needed). Secrets are never printed:
+# "describe pod" shows only the name of the Secret the env comes from, not its values.
+diagnose() {
+  kubectl -n "$NS" get pods -l "app=$1" -o wide || true
+  for pod in $(kubectl -n "$NS" get pods -l "app=$1" -o jsonpath='{.items[*].metadata.name}'); do
+    echo "----- $pod: state and events"
+    kubectl -n "$NS" describe pod "$pod" | sed -n '/^Containers:/,/^Conditions:/p;/^Events:/,$p' || true
+    echo "----- $pod: last log lines"
+    kubectl -n "$NS" logs "$pod" --tail=40 || true
+    kubectl -n "$NS" logs "$pod" --previous --tail=40 2>/dev/null || true
+  done
+  kubectl top node 2>/dev/null || true
+}
+
 log "4/4 rolling out the new version"
 kubectl apply -f "$DIR/app/"
 for d in api worker web; do
   if ! kubectl -n "$NS" rollout status "deployment/$d" --timeout=300s; then
-    log "$d did not become healthy: rolling back to the previous version"
-    kubectl -n "$NS" describe deployment "$d" | tail -20 || true
-    kubectl -n "$NS" rollout undo "deployment/$d"
-    kubectl -n "$NS" rollout status "deployment/$d" --timeout=300s || true
+    log "$d did not become healthy. What the pods say:"
+    diagnose "$d"
+    # Roll back only if there IS a previous version (on the very first deploy there is nothing to go back to).
+    if [ "$(kubectl -n "$NS" get "deployment/$d" -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')" -gt 1 ]; then
+      log "rolling $d back to the previous version"
+      kubectl -n "$NS" rollout undo "deployment/$d"
+      kubectl -n "$NS" rollout status "deployment/$d" --timeout=300s || true
+    else
+      log "first deploy of $d: nothing to roll back to, pods are left running for debugging"
+    fi
     exit 1
   fi
 done
