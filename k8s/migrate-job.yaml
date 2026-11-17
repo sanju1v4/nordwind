@@ -16,6 +16,9 @@ spec:
     spec:
       restartPolicy: Never
       imagePullSecrets: [{ name: ecr-pull }]
+      # Kubernetes would otherwise inject variables for every Service, e.g. a Service named "api" becomes
+      # API_PORT=tcp://10.43.x.x:3000 and overwrites our own API_PORT setting. Use DNS names instead.
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
